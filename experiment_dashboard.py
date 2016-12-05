@@ -1,6 +1,7 @@
 #!/home/hadoop/anaconda2/bin/ipython
 import pip
 pip.main(['install', '--upgrade', 'plotly'])
+pip.main(['install', '--upgrade', 'py4j'])
 
 import sys
 import math
@@ -33,7 +34,13 @@ class ExperimentDashboard:
     self.parse_arguments(args)
     self.months = self.get_months()
     self.create_as_tables()
+    self.set_session_counts()
     self.create_daily_event_graphs()
+    self.create_nav_only_graphs()
+
+  def set_session_counts(self):
+    self.control_session_counts_per_day = self.distinct_sessions_or_events(self.stats_df, "control")
+    self.exp_session_counts_per_day = self.distinct_sessions_or_events(self.stats_df, "exp")
 
   def uninit(self):
     self.sc.stop()
@@ -116,17 +123,18 @@ class ExperimentDashboard:
 
   def nav_only_sessions(self, variant):
     return self.stats_df \
-      .where(stats_df.session_id != 'n/a') \
-      .where(stats_df.session_id.isNotNull()) \
-      .where(stats_df.addon_version.isin(self.versions)) \
-      .where(stats_df.unload_reason == 'navigation') \
+      .where(self.stats_df.session_id != 'n/a') \
+      .where(self.stats_df.session_id.isNotNull()) \
+      .where(self.stats_df.addon_version.isin(self.versions)) \
+      .where(self.stats_df.unload_reason == 'navigation') \
       .where(self.get_variant(variant)) \
-      .join(events_df, stats_df.session_id == events_df.session_id, 'outer') \
-      .select(stats_df.date, stats_df.session_id, stats_df.experiment_id, stats_df.addon_version, stats_df.unload_reason) \
+      .join(self.events_df, self.stats_df.session_id == self.events_df.session_id, 'outer') \
+      .select(self.stats_df.date, self.stats_df.session_id, self.stats_df.experiment_id, self.stats_df.addon_version, self.stats_df.unload_reason) \
       .groupBy("date", "session_id") \
       .count() \
       .where(col("count") <= 1) \
       .groupBy("date").count() \
+      .select("date", col("count").alias(variant + "_nav_count")) \
       .orderBy("date")
 
   def get_event_rate(self, variant, event, session_counts_per_day):
@@ -196,25 +204,49 @@ class ExperimentDashboard:
     return dict(data=data, layout=layout)
 
   def create_daily_event_graphs(self):
-    self.control_session_counts_per_day = self.distinct_sessions_or_events(self.stats_df, "control")
-    self.exp_session_counts_per_day = self.distinct_sessions_or_events(self.stats_df, "exp")
-
     for event in self.EVENTS:
       print "Processing event: " + event
       control_event_rate = self.get_event_rate("control", event, self.control_session_counts_per_day)
-      exp_event_rate = self.get_event_rate("exp", event, self.exp_session_counts_per_day )
+      exp_event_rate = self.get_event_rate("exp", event, self.exp_session_counts_per_day)
 
       power, p_val = self.compute_power_and_p_value(control_event_rate, exp_event_rate)
       self.metric_table.append([event + ' Ratio', self.ALPHA_ERROR, power, p_val])
   
       fig = self.create_graph(exp_event_rate, control_event_rate, event)
-      self.graphs.append(py.plot(fig, filename=self.experiment_id + "_" + event))
+      self.graphs.append(py.plot(fig, filename=self.experiment_id + "_" + event, auto_open=False))
+
+  def create_nav_only_graphs(self):
+    print "Computing nav-only graph"
+    control_nav_only_rate = self.get_nav_only_rate("control", self.control_session_counts_per_day)
+    exp_nav_only_rate = self.get_nav_only_rate("exp", self.exp_session_counts_per_day)
+
+    graph_type = "navigation_only"
+    power, p_val = self.compute_power_and_p_value(control_nav_only_rate, exp_nav_only_rate)
+    self.metric_table.append([graph_type + ' Ratio', self.ALPHA_ERROR, power, p_val])
+    fig = self.create_graph(exp_nav_only_rate, control_nav_only_rate, graph_type)
+    self.graphs.append(py.plot(fig, filename=self.experiment_id + "_" + graph_type, auto_open=False))
 
   def print_graphs(self):
     print self.graphs
+
+  def get_nav_only_rate(self, variant, session_counts_per_day):
+    nav_only_sessions_by_day = self.nav_only_sessions(variant)
+    return session_counts_per_day \
+      .join(nav_only_sessions_by_day, nav_only_sessions_by_day.date == session_counts_per_day.date) \
+      .drop(session_counts_per_day.date) \
+      .select("date", (col(variant + "_nav_count") / col(variant + "_session_count") * 100).alias(variant + "_ratio")) \
+      .orderBy("date")
+
+  def get_event_rate(self, variant, event, session_counts_per_day):
+    clicks_by_day = self.distinct_sessions_or_events(self.events_df, variant, event)
+    return session_counts_per_day \
+      .join(clicks_by_day, clicks_by_day.date == session_counts_per_day.date) \
+      .drop(session_counts_per_day.date) \
+      .select("date", (col(variant + "_event_count") / col(variant + "_session_count") * 100).alias(variant + "_ratio")) \
+      .orderBy("date")
+
 
 if __name__ == '__main__':
   dash = ExperimentDashboard(sys.argv[1:])
   dash.print_graphs()
   dash.uninit()
-
