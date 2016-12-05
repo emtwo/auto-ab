@@ -37,6 +37,7 @@ class ExperimentDashboard:
     self.set_session_counts()
     self.create_daily_event_graphs()
     self.create_nav_only_graphs()
+    self.graphs.append(py.plot(FF.create_table(self.metric_table), filename="table", auto_open=False))
 
   def set_session_counts(self):
     self.control_session_counts_per_day = self.distinct_sessions_or_events(self.stats_df, "control")
