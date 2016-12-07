@@ -83,6 +83,8 @@ class ExperimentDashboard:
       .where(col("session_id") != 'n/a') \
       .where(col("session_id").isNotNull()) \
       .where(col("addon_version").isin(self.versions)) \
+      .where(col("date") >= self.start_date) \
+      .where(col("date") <= self.end_date) \
       .where(self.get_variant(variant)) \
       .groupBy("date") \
       .agg(countDistinct("session_id").alias(variant + "_" + ("event" if event else "session") + "_count")) \
@@ -127,6 +129,8 @@ class ExperimentDashboard:
       .where(self.stats_df.session_id != 'n/a') \
       .where(self.stats_df.session_id.isNotNull()) \
       .where(self.stats_df.addon_version.isin(self.versions)) \
+      .where(col("date") >= self.start_date) \
+      .where(col("date") <= self.end_date) \
       .where(self.stats_df.unload_reason == 'navigation') \
       .where(self.get_variant(variant)) \
       .join(self.events_df, self.stats_df.session_id == self.events_df.session_id, 'outer') \
